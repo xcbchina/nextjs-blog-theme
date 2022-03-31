@@ -1,7 +1,135 @@
 ---
-title: Design critiques at Figma
-description: "Consider that for a moment: everything we see around us is assumed to have had a cause and is contingent upon."
-date: Jan 2 2021
+title: Centos7部署K8s集群
+description: "Centos7部署K8s集群、一天master两天node节点"
+date: Jan 2 2022
 ---
+
+
+| **k8s-master** | **192.168.1.100** |
+| --- | --- |
+| **k8s-node1** | **192.168.1.101** |
+| **k8s-node2** | **192.168.1.102** |
+
+## 1.前置工作
+### 1.1修改主机名
+```bash
+hostnamectl set-hostname k8s-master #修改192.168.1.100主机名为k8s-master
+hostnamectl set-hostname k8s-node1  #修改192.168.1.101主机名为k8s-node1
+hostnamectl set-hostname k8s-node2  #修改192.168.1.102主机名为k8s-node2
+```
+### 1.2修改hosts文件
+```bash
+vim /etc/hosts
+192.168.1.100 k8s-master
+192.168.1.101 k8s-node1
+192.168.1.102 k8s-node2
+```
+### 1.3关闭防火墙
+```bash
+systemctl stop firewalld #暂时关闭防火墙
+systemctl disable firewalld # 永久关闭防火墙 
+```
+### 14关闭selinux
+```bash
+setenforce 0  # 临时关闭
+sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config # 永久关闭 
+```
+### 1.5关闭swap
+```bash
+swapoff -a    # 临时关闭；关闭swap主要是为了性能考虑
+free             # 可以通过这个命令查看swap是否关闭了
+sed -ri 's/.*swap.*/#&/' /etc/fstab  # 永久关闭
+```
+### 1.6将桥接的IPV4流量传递到iptables 的链
+```bash
+cat > /etc/sysctl.d/k8s.conf << EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+sysctl --system
+```
+### 1.7安装Docker
+只在k8s-master上安装docker，node节点暂时不安装
+```bash
+wget https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo -O/etc/yum.repos.d/docker-ce.repo
+yum -y install docker-ce.x86_64
+systemctl enable docker #设置开机启动
+systemctl start docker #启动docker服务
+docker --version  #查看docker版本
+```
+### 1.8添加阿里云YUM软件源
+```bash
+cat > /etc/yum.repos.d/kubernetes.repo << EOF
+[kubernetes]
+name=Kubernetes
+baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=0
+gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg
+https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+EOF
+```
+## 2. k8s-master主机安装kubeadm，kubelet和kubectl
+### 2.1安装kubeadm，kubelet和kubectl
+现在开始在master主机上安装kubernetes Master
+```bash
+yum -y install etcd kubernetes-master
+```
+### 2.2配置etcd.conf
+```bash
+vi /etc/etcd/etcd.conf
+```
+![image.png](https://cdn.nlark.com/yuque/0/2022/png/26746198/1647602361562-de13d674-1cf1-4def-9efd-94e75ade3a14.png#clientId=udab8cc36-5f53-4&crop=0&crop=0&crop=1&crop=1&from=paste&height=512&id=u3b6610e9&margin=%5Bobject%20Object%5D&name=image.png&originHeight=512&originWidth=1036&originalType=binary&ratio=1&rotation=0&showTitle=false&size=64685&status=done&style=none&taskId=u3026c074-eade-40f0-845c-ff3aca430e5&title=&width=1036)
+### 2.3配置apiserver
+```bash
+vi /etc/kubernetes/apiserver
+```
+![image.png](https://cdn.nlark.com/yuque/0/2022/png/26746198/1647602906672-bd9489c2-c6f4-4968-9bf0-a5a62628ccd1.png#clientId=udab8cc36-5f53-4&crop=0&crop=0&crop=1&crop=1&from=paste&height=418&id=ud119fd3a&margin=%5Bobject%20Object%5D&name=image.png&originHeight=418&originWidth=1059&originalType=binary&ratio=1&rotation=0&showTitle=false&size=46783&status=done&style=none&taskId=ued5b7ec7-d27e-49cf-8bb7-598e0cd11e3&title=&width=1059)
+### 2.4.启动etcd、kube-apiserver、kube-controller-manager、kube-scheduler等服务，并设置开机启动。
+```bash
+for SERVICES in etcd kube-apiserver kube-controller-manager kube-scheduler; do systemctl restart $SERVICES;systemctl enable $SERVICES;systemctl status $SERVICES ; done
+```
+![image.png](https://cdn.nlark.com/yuque/0/2022/png/26746198/1647603306041-2ef836f4-3d34-452e-8025-3e60ffd8d565.png#clientId=udab8cc36-5f53-4&crop=0&crop=0&crop=1&crop=1&from=paste&height=778&id=ue5a960d2&margin=%5Bobject%20Object%5D&name=image.png&originHeight=778&originWidth=1540&originalType=binary&ratio=1&rotation=0&showTitle=false&size=209790&status=done&style=none&taskId=u0b07c315-6b13-4eff-ba53-b8a5ce3f9df&title=&width=1540)
+### 2.5.在etcd中定义flannel网络
+```bash
+etcdctl mk /atomic.io/network/config '{"Network":"172.17.0.0/16"}'
+```
+![image.png](https://cdn.nlark.com/yuque/0/2022/png/26746198/1647603419892-c066581b-e56e-4f2d-872f-eadb592e3d35.png#clientId=udab8cc36-5f53-4&crop=0&crop=0&crop=1&crop=1&from=paste&height=52&id=u13cf6138&margin=%5Bobject%20Object%5D&name=image.png&originHeight=52&originWidth=794&originalType=binary&ratio=1&rotation=0&showTitle=false&size=7355&status=done&style=none&taskId=u6cb761ba-5c66-4ab2-a0d2-9d21cf419e0&title=&width=794)
+### 2.6部署Dashboard 
+```bash
+wget https://raw.githubusercontent.com/kubernetes/dashboard/v2.5.0/aio/deploy/recommended.yaml
+kubectl apply -f  recommended.yaml  #如果下载不下来的话下面附件为recommended.yaml 
+```
+[recommended.yaml](https://www.yuque.com/attachments/yuque/0/2022/yaml/26746198/1647610184659-6b624900-aea4-4390-bf2d-723d2a663e60.yaml?_lake_card=%7B%22src%22%3A%22https%3A%2F%2Fwww.yuque.com%2Fattachments%2Fyuque%2F0%2F2022%2Fyaml%2F26746198%2F1647610184659-6b624900-aea4-4390-bf2d-723d2a663e60.yaml%22%2C%22name%22%3A%22recommended.yaml%22%2C%22size%22%3A7621%2C%22type%22%3A%22%22%2C%22ext%22%3A%22yaml%22%2C%22status%22%3A%22done%22%2C%22taskId%22%3A%22u1e9995ef-2afe-449f-b6a9-00490aa0a22%22%2C%22taskType%22%3A%22upload%22%2C%22id%22%3A%22u97f86cec%22%2C%22card%22%3A%22file%22%7D)
+
+#### 到此 k8s-master主机配置完成
+## 3.node1主机上部署kubernetes
+### 3.1在node机上安装kubernetes Node和flannel组件应用，会自动安装docker
+```bash
+yum -y install flannel kubernetes-node   
+```
+### 3.2 为flannel网络指定etcd服务
+```bash
+vi /etc/sysconfig/flanneld
+```
+![image.png](https://cdn.nlark.com/yuque/0/2022/png/26746198/1647607561260-5d95cd31-7094-42b5-b687-aa7dcaad1337.png#clientId=udab8cc36-5f53-4&crop=0&crop=0&crop=1&crop=1&from=paste&height=199&id=u37bfcdb2&margin=%5Bobject%20Object%5D&name=image.png&originHeight=199&originWidth=805&originalType=binary&ratio=1&rotation=0&showTitle=false&size=20583&status=done&style=none&taskId=u55b78248-6670-461c-8d1d-50324100849&title=&width=805)
+### 3.3 修改kubernetes的config文件
+```bash
+vi /etc/kubernetes/config
+```
+![image.png](https://cdn.nlark.com/yuque/0/2022/png/26746198/1647607816281-395da655-f766-41a0-a4df-802e4513867b.png#clientId=udab8cc36-5f53-4&crop=0&crop=0&crop=1&crop=1&from=paste&height=334&id=u3b08b270&margin=%5Bobject%20Object%5D&name=image.png&originHeight=334&originWidth=785&originalType=binary&ratio=1&rotation=0&showTitle=false&size=35358&status=done&style=none&taskId=u0f2aa01d-a589-48bc-b1ef-19ffa1f9607&title=&width=785)
+### 3.4 修改kubernetes的kubelet文件
+```bash
+vi /etc/kubernetes/kubelet
+```
+![image.png](https://cdn.nlark.com/yuque/0/2022/png/26746198/1647608394693-9519a923-2e2f-4e40-9315-33850bc6dd68.png#clientId=udab8cc36-5f53-4&crop=0&crop=0&crop=1&crop=1&from=paste&height=350&id=u59aa16fd&margin=%5Bobject%20Object%5D&name=image.png&originHeight=350&originWidth=1079&originalType=binary&ratio=1&rotation=0&showTitle=false&size=41012&status=done&style=none&taskId=u0fe811a9-f6be-4820-8be2-18280338b99&title=&width=1079)
+### 3.5 运行服务
+在node1节点机上启动kube-proxy,kubelet,docker,flanneld等服务，并设置开机启动。
+```bash
+for SERVICES in kube-proxy kubelet docker flanneld;do systemctl restart $SERVICES;systemctl enable $SERVICES;systemctl status $SERVICES; done
+```
+![image.png](https://cdn.nlark.com/yuque/0/2022/png/26746198/1647609167183-876f9779-de9b-4dbe-90fd-0973aa478e70.png#clientId=udab8cc36-5f53-4&crop=0&crop=0&crop=1&crop=1&from=paste&height=402&id=u9a67f388&margin=%5Bobject%20Object%5D&name=image.png&originHeight=402&originWidth=1553&originalType=binary&ratio=1&rotation=0&showTitle=false&size=102651&status=done&style=none&taskId=u3b1b89ff-f1a3-4ba7-8a0a-e298f3994ac&title=&width=1553)
+#### 到此node1节点主机已经部署完成
 
 This is an example post. There's another one [here](/posts/example-post).
